@@ -16,7 +16,7 @@ import (
 
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config"
-	"github.com/rclone/rclone/fs/rc/rcflags"
+	"github.com/rclone/rclone/fs/rc"
 )
 
 // PackageJSON is the structure of package.json of a plugin
@@ -83,7 +83,7 @@ func newPlugins(fileName string) *Plugins {
 }
 
 func initPluginsOrError() error {
-	if !rcflags.Opt.WebUI {
+	if !rc.Opt.WebUI {
 		return errors.New("WebUI needs to be enabled for plugins to work")
 	}
 	initMutex.Lock()
@@ -142,33 +142,6 @@ func (p *Plugins) addPlugin(pluginName string, packageJSONPath string) (err erro
 	if err != nil {
 		return err
 	}
-	p.LoadedPlugins[pluginName] = pkgJSON
-
-	err = p.writeToFile()
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (p *Plugins) addTestPlugin(pluginName string, testURL string, handlesType []string) (err error) {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-	err = p.readFromFile()
-	if err != nil {
-		return err
-	}
-
-	var pkgJSON = PackageJSON{
-		Name:    pluginName,
-		TestURL: testURL,
-		Rclone: RcloneConfig{
-			HandlesType: handlesType,
-			Test:        true,
-		},
-	}
-
 	p.LoadedPlugins[pluginName] = pkgJSON
 
 	err = p.writeToFile()

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"testing"
+	"unsafe"
 
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/operations"
@@ -18,7 +19,7 @@ import (
 )
 
 func fileCreate(t *testing.T, mode vfscommon.CacheMode) (r *fstest.Run, vfs *VFS, fh *File, item fstest.Item) {
-	opt := vfscommon.DefaultOpt
+	opt := vfscommon.Opt
 	opt.CacheMode = mode
 	opt.WriteBack = writeBackDelay
 	r, vfs = newTestVFSOpt(t, &opt)
@@ -47,7 +48,7 @@ func TestFileMethods(t *testing.T) {
 	assert.Equal(t, true, file.IsFile())
 
 	// Mode
-	assert.Equal(t, vfs.Opt.FilePerms, file.Mode())
+	assert.Equal(t, os.FileMode(vfs.Opt.FilePerms), file.Mode())
 
 	// Name
 	assert.Equal(t, "file1", file.Name())
@@ -192,7 +193,9 @@ func TestFileOpenReadUnknownSize(t *testing.T) {
 	assert.Equal(t, int64(-1), o.Size())
 
 	// add it to a mock fs
-	f := mockfs.NewFs(context.Background(), "test", "root")
+	fMock, err := mockfs.NewFs(context.Background(), "test", "root", nil)
+	require.NoError(t, err)
+	f := fMock.(*mockfs.Fs)
 	f.AddObject(o)
 	testObj, err := f.NewObject(ctx, remote)
 	require.NoError(t, err)
@@ -410,4 +413,8 @@ func TestFileRename(t *testing.T) {
 			testFileRename(t, test.mode, test.inCache, test.forceCache)
 		})
 	}
+}
+
+func TestFileStructSize(t *testing.T) {
+	t.Logf("File struct has size %d bytes", unsafe.Sizeof(File{}))
 }

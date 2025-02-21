@@ -1,5 +1,4 @@
 //go:build !plan9
-// +build !plan9
 
 // Package storj provides an interface to Storj decentralized object storage.
 package storj
@@ -32,9 +31,9 @@ const (
 )
 
 var satMap = map[string]string{
-	"us-central-1.storj.io":  "12EayRS2V1kEsWESU9QMRseFhdxYxKicsiFmxrsLZHeLUtdps3S@us-central-1.tardigrade.io:7777",
-	"europe-west-1.storj.io": "12L9ZFwhzVpuEKMUNUqkaTLGzwY9G24tbiigLiXpmZWKwmcNDDs@europe-west-1.tardigrade.io:7777",
-	"asia-east-1.storj.io":   "121RTSDpyNZVcEU84Ticf2L1ntiuUimbWgfATz21tuvgk3vzoA6@asia-east-1.tardigrade.io:7777",
+	"us1.storj.io": "12EayRS2V1kEsWESU9QMRseFhdxYxKicsiFmxrsLZHeLUtdps3S@us1.storj.io:7777",
+	"eu1.storj.io": "12L9ZFwhzVpuEKMUNUqkaTLGzwY9G24tbiigLiXpmZWKwmcNDDs@eu1.storj.io:7777",
+	"ap1.storj.io": "121RTSDpyNZVcEU84Ticf2L1ntiuUimbWgfATz21tuvgk3vzoA6@ap1.storj.io:7777",
 }
 
 // Register with Fs
@@ -98,36 +97,39 @@ func init() {
 				},
 				}},
 			{
-				Name:     "access_grant",
-				Help:     "Access grant.",
-				Provider: "existing",
+				Name:      "access_grant",
+				Help:      "Access grant.",
+				Provider:  "existing",
+				Sensitive: true,
 			},
 			{
 				Name:     "satellite_address",
 				Help:     "Satellite address.\n\nCustom satellite address should match the format: `<nodeid>@<address>:<port>`.",
 				Provider: newProvider,
-				Default:  "us-central-1.storj.io",
+				Default:  "us1.storj.io",
 				Examples: []fs.OptionExample{{
-					Value: "us-central-1.storj.io",
-					Help:  "US Central 1",
+					Value: "us1.storj.io",
+					Help:  "US1",
 				}, {
-					Value: "europe-west-1.storj.io",
-					Help:  "Europe West 1",
+					Value: "eu1.storj.io",
+					Help:  "EU1",
 				}, {
-					Value: "asia-east-1.storj.io",
-					Help:  "Asia East 1",
+					Value: "ap1.storj.io",
+					Help:  "AP1",
 				},
 				},
 			},
 			{
-				Name:     "api_key",
-				Help:     "API key.",
-				Provider: newProvider,
+				Name:      "api_key",
+				Help:      "API key.",
+				Provider:  newProvider,
+				Sensitive: true,
 			},
 			{
-				Name:     "passphrase",
-				Help:     "Encryption passphrase.\n\nTo access existing objects enter passphrase used for uploading.",
-				Provider: newProvider,
+				Name:      "passphrase",
+				Help:      "Encryption passphrase.\n\nTo access existing objects enter passphrase used for uploading.",
+				Provider:  newProvider,
+				Sensitive: true,
 			},
 		},
 	})
@@ -528,7 +530,11 @@ func (f *Fs) NewObject(ctx context.Context, relative string) (_ fs.Object, err e
 // May create the object even if it returns an error - if so will return the
 // object and the error, otherwise will return nil and the error
 func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (_ fs.Object, err error) {
-	fs.Debugf(f, "cp input ./%s # %+v %d", src.Remote(), options, src.Size())
+	return f.put(ctx, in, src, src.Remote(), options...)
+}
+
+func (f *Fs) put(ctx context.Context, in io.Reader, src fs.ObjectInfo, remote string, options ...fs.OpenOption) (_ fs.Object, err error) {
+	fs.Debugf(f, "cp input ./%s # %+v %d", remote, options, src.Size())
 
 	// Reject options we don't support.
 	for _, option := range options {
@@ -539,7 +545,7 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 		}
 	}
 
-	bucketName, bucketPath := f.absolute(src.Remote())
+	bucketName, bucketPath := f.absolute(remote)
 
 	upload, err := f.project.UploadObject(ctx, bucketName, bucketPath, nil)
 	if err != nil {
@@ -549,7 +555,7 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 		if err != nil {
 			aerr := upload.Abort()
 			if aerr != nil && !errors.Is(aerr, uplink.ErrUploadDone) {
-				fs.Errorf(f, "cp input ./%s %+v: %+v", src.Remote(), options, aerr)
+				fs.Errorf(f, "cp input ./%s %+v: %+v", remote, options, aerr)
 			}
 		}
 	}()
@@ -574,7 +580,7 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 		}
 
 		err = fserrors.RetryError(err)
-		fs.Errorf(f, "cp input ./%s %+v: %+v\n", src.Remote(), options, err)
+		fs.Errorf(f, "cp input ./%s %+v: %+v\n", remote, options, err)
 
 		return nil, err
 	}
@@ -589,11 +595,19 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 				return nil, err
 			}
 			err = fserrors.RetryError(errors.New("bucket was not available, now created, the upload must be retried"))
+		} else if errors.Is(err, uplink.ErrTooManyRequests) {
+			// Storj has a rate limit of 1 per second of uploading to the same file.
+			// This produces ErrTooManyRequests here, so we wait 1 second and retry.
+			//
+			// See: https://github.com/storj/uplink/issues/149
+			fs.Debugf(f, "uploading too fast - sleeping for 1 second: %v", err)
+			time.Sleep(time.Second)
+			err = fserrors.RetryError(err)
 		}
 		return nil, err
 	}
 
-	return newObjectFromUplink(f, src.Remote(), upload.Info()), nil
+	return newObjectFromUplink(f, remote, upload.Info()), nil
 }
 
 // PutStream uploads to the remote path with the modTime given of indeterminate

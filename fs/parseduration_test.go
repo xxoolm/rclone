@@ -11,8 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Check it satisfies the interface
-var _ flagger = (*Duration)(nil)
+// Check it satisfies the interfaces
+var (
+	_ Flagger   = (*Duration)(nil)
+	_ FlaggerNP = Duration(0)
+)
 
 func TestParseDuration(t *testing.T) {
 	now := time.Date(2020, 9, 5, 8, 15, 5, 250, time.UTC)
@@ -108,38 +111,44 @@ func TestDurationString(t *testing.T) {
 
 func TestDurationReadableString(t *testing.T) {
 	for _, test := range []struct {
-		negative bool
-		in       time.Duration
-		want     string
+		negative  bool
+		in        time.Duration
+		wantLong  string
+		wantShort string
 	}{
 		// Edge Cases
-		{false, time.Duration(DurationOff), "off"},
+		{false, time.Duration(DurationOff), "off", "off"},
 		// Base Cases
-		{false, time.Duration(0), "0s"},
-		{true, time.Millisecond, "1ms"},
-		{true, time.Second, "1s"},
-		{true, time.Minute, "1m"},
-		{true, (3 * time.Minute) / 2, "1m30s"},
-		{true, time.Hour, "1h"},
-		{true, time.Hour * 24, "1d"},
-		{true, time.Hour * 24 * 7, "1w"},
-		{true, time.Hour * 24 * 365, "1y"},
+		{false, time.Duration(0), "0s", "0s"},
+		{true, time.Millisecond, "1ms", "1ms"},
+		{true, time.Second, "1s", "1s"},
+		{true, time.Minute, "1m", "1m"},
+		{true, (3 * time.Minute) / 2, "1m30s", "1m30s"},
+		{true, time.Hour, "1h", "1h"},
+		{true, time.Hour * 24, "1d", "1d"},
+		{true, time.Hour * 24 * 7, "1w", "1w"},
+		{true, time.Hour * 24 * 365, "1y", "1y"},
 		// Composite Cases
-		{true, time.Hour + 2*time.Minute + 3*time.Second, "1h2m3s"},
-		{true, time.Hour * 24 * (365 + 14), "1y2w"},
-		{true, time.Hour*24*4 + time.Hour*3 + time.Minute*2 + time.Second, "4d3h2m1s"},
-		{true, time.Hour * 24 * (365*3 + 7*2 + 1), "3y2w1d"},
-		{true, time.Hour*24*(365*3+7*2+1) + time.Hour*2 + time.Second, "3y2w1d2h1s"},
-		{true, time.Hour*24*(365*3+7*2+1) + time.Second, "3y2w1d1s"},
-		{true, time.Hour*24*(365+7*2+3) + time.Hour*4 + time.Minute*5 + time.Second*6 + time.Millisecond*7, "1y2w3d4h5m6s7ms"},
+		{true, time.Hour + 2*time.Minute + 3*time.Second, "1h2m3s", "1h2m3s"},
+		{true, time.Hour * 24 * (365 + 14), "1y2w", "1y2w"},
+		{true, time.Hour*24*4 + time.Hour*3 + time.Minute*2 + time.Second, "4d3h2m1s", "4d3h2m"},
+		{true, time.Hour * 24 * (365*3 + 7*2 + 1), "3y2w1d", "3y2w1d"},
+		{true, time.Hour*24*(365*3+7*2+1) + time.Hour*2 + time.Second, "3y2w1d2h1s", "3y2w1d"},
+		{true, time.Hour*24*(365*3+7*2+1) + time.Second, "3y2w1d1s", "3y2w1d"},
+		{true, time.Hour*24*(365+7*2+3) + time.Hour*4 + time.Minute*5 + time.Second*6 + time.Millisecond*7, "1y2w3d4h5m6s7ms", "1y2w3d"},
+		{true, time.Duration(DurationOff) / time.Millisecond * time.Millisecond, "292y24w3d23h47m16s853ms", "292y24w3d"}, // Should have been 854ms but some precision are lost with floating point calculations
 	} {
 		got := Duration(test.in).ReadableString()
-		assert.Equal(t, test.want, got)
+		assert.Equal(t, test.wantLong, got)
+		got = Duration(test.in).ShortReadableString()
+		assert.Equal(t, test.wantShort, got)
 
 		// Test Negative Case
 		if test.negative {
 			got = Duration(-test.in).ReadableString()
-			assert.Equal(t, "-"+test.want, got)
+			assert.Equal(t, "-"+test.wantLong, got)
+			got = Duration(-test.in).ShortReadableString()
+			assert.Equal(t, "-"+test.wantShort, got)
 		}
 	}
 }
@@ -203,5 +212,34 @@ func TestParseUnmarshalJSON(t *testing.T) {
 			require.NoError(t, err, test.in)
 		}
 		assert.Equal(t, Duration(test.want), duration, test.in)
+	}
+}
+
+func TestUnmarshalJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    Duration
+		wantErr bool
+	}{
+		{"off string", `"off"`, DurationOff, false},
+		{"max int64", `9223372036854775807`, DurationOff, false},
+		{"duration string", `"1h"`, Duration(time.Hour), false},
+		{"invalid string", `"invalid"`, 0, true},
+		{"negative int", `-1`, Duration(-1), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var d Duration
+			err := json.Unmarshal([]byte(tt.input), &d)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("UnmarshalJSON() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if d != tt.want {
+				t.Errorf("UnmarshalJSON() got = %v, want %v", d, tt.want)
+			}
+		})
 	}
 }

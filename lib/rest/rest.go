@@ -130,7 +130,8 @@ type Opts struct {
 	Path                  string // relative to RootURL
 	RootURL               string // override RootURL passed into SetRoot()
 	Body                  io.Reader
-	NoResponse            bool // set to close Body
+	GetBody               func() (io.ReadCloser, error) // body builder, needed to enable low-level HTTP/2 retries
+	NoResponse            bool                          // set to close Body
 	ContentType           string
 	ContentLength         *int64
 	ContentRange          string
@@ -148,6 +149,9 @@ type Opts struct {
 	Trailer               *http.Header // set the request trailer
 	Close                 bool         // set to close the connection after this transaction
 	NoRedirect            bool         // if this is set then the client won't follow redirects
+	// On Redirects, call this function - see the http.Client docs: https://pkg.go.dev/net/http#Client
+	CheckRedirect func(req *http.Request, via []*http.Request) error
+	AuthRedirect  bool // if this is set then the client will redirect with Auth
 }
 
 // Copy creates a copy of the options
@@ -156,16 +160,41 @@ func (o *Opts) Copy() *Opts {
 	return &newOpts
 }
 
+const drainLimit = 10 * 1024 * 1024
+
+// drainAndClose discards up to drainLimit bytes from r and closes
+// it. Any errors from the Read or Close are returned.
+func drainAndClose(r io.ReadCloser) (err error) {
+	_, readErr := io.CopyN(io.Discard, r, drainLimit)
+	if readErr == io.EOF {
+		readErr = nil
+	}
+	err = r.Close()
+	if readErr != nil {
+		return readErr
+	}
+	return err
+}
+
+// checkDrainAndClose is a utility function used to check the return
+// from drainAndClose in a defer statement.
+func checkDrainAndClose(r io.ReadCloser, err *error) {
+	cerr := drainAndClose(r)
+	if *err == nil {
+		*err = cerr
+	}
+}
+
 // DecodeJSON decodes resp.Body into result
 func DecodeJSON(resp *http.Response, result interface{}) (err error) {
-	defer fs.CheckClose(resp.Body, &err)
+	defer checkDrainAndClose(resp.Body, &err)
 	decoder := json.NewDecoder(resp.Body)
 	return decoder.Decode(result)
 }
 
 // DecodeXML decodes resp.Body into result
 func DecodeXML(resp *http.Response, result interface{}) (err error) {
-	defer fs.CheckClose(resp.Body, &err)
+	defer checkDrainAndClose(resp.Body, &err)
 	decoder := xml.NewDecoder(resp.Body)
 	// MEGAcmd has included escaped HTML entities in its XML output, so we have to be able to
 	// decode them.
@@ -179,6 +208,39 @@ func ClientWithNoRedirects(c *http.Client) *http.Client {
 	clientCopy := *c
 	clientCopy.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
+	}
+	return &clientCopy
+}
+
+// Do calls the internal http.Client.Do method
+func (api *Client) Do(req *http.Request) (*http.Response, error) {
+	return api.c.Do(req)
+}
+
+// ClientWithAuthRedirects makes a new http client which will re-apply Auth on redirects
+func ClientWithAuthRedirects(c *http.Client) *http.Client {
+	clientCopy := *c
+	clientCopy.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		} else if len(via) == 0 {
+			return nil
+		}
+		prevReq := via[len(via)-1]
+		resp := req.Response
+		if resp == nil {
+			return nil
+		}
+		// Look at previous response to see if it was a redirect and preserve auth if so
+		switch resp.StatusCode {
+		case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+			// Reapply Auth (if any) from previous request on redirect
+			auth := prevReq.Header.Get("Authorization")
+			if auth != "" {
+				req.Header.Add("Authorization", auth)
+			}
+		}
+		return nil
 	}
 	return &clientCopy
 }
@@ -205,7 +267,7 @@ func (api *Client) Call(ctx context.Context, opts *Opts) (resp *http.Response, e
 		return nil, errors.New("RootURL not set")
 	}
 	url += opts.Path
-	if opts.Parameters != nil && len(opts.Parameters) > 0 {
+	if len(opts.Parameters) > 0 {
 		url += "?" + opts.Parameters.Encode()
 	}
 	body := readers.NoCloser(opts.Body)
@@ -239,6 +301,9 @@ func (api *Client) Call(ctx context.Context, opts *Opts) (resp *http.Response, e
 	if len(opts.TransferEncoding) != 0 {
 		req.TransferEncoding = opts.TransferEncoding
 	}
+	if opts.GetBody != nil {
+		req.GetBody = opts.GetBody
+	}
 	if opts.Trailer != nil {
 		req.Trailer = *opts.Trailer
 	}
@@ -246,10 +311,8 @@ func (api *Client) Call(ctx context.Context, opts *Opts) (resp *http.Response, e
 		req.Close = true
 	}
 	// Set any extra headers
-	if opts.ExtraHeaders != nil {
-		for k, v := range opts.ExtraHeaders {
-			headers[k] = v
-		}
+	for k, v := range opts.ExtraHeaders {
+		headers[k] = v
 	}
 	// add any options to the headers
 	fs.OpenOptionAddHeaders(opts.Options, headers)
@@ -272,6 +335,12 @@ func (api *Client) Call(ctx context.Context, opts *Opts) (resp *http.Response, e
 	var c *http.Client
 	if opts.NoRedirect {
 		c = ClientWithNoRedirects(api.c)
+	} else if opts.CheckRedirect != nil {
+		clientCopy := *api.c
+		clientCopy.CheckRedirect = opts.CheckRedirect
+		c = &clientCopy
+	} else if opts.AuthRedirect {
+		c = ClientWithAuthRedirects(api.c)
 	} else {
 		c = api.c
 	}
@@ -300,7 +369,7 @@ func (api *Client) Call(ctx context.Context, opts *Opts) (resp *http.Response, e
 		}
 	}
 	if opts.NoResponse {
-		return resp, resp.Body.Close()
+		return resp, drainAndClose(resp.Body)
 	}
 	return resp, nil
 }

@@ -43,7 +43,7 @@ func testFile(t *testing.T, contents string) string {
 }
 
 func TestNewFilterForbiddenMixOfFilesFromAndFilterRule(t *testing.T) {
-	Opt := DefaultOpt
+	Opt := Opt
 
 	// Set up the input
 	Opt.FilterRule = []string{"- filter1", "- filter1b"}
@@ -66,7 +66,7 @@ func TestNewFilterForbiddenMixOfFilesFromAndFilterRule(t *testing.T) {
 }
 
 func TestNewFilterForbiddenMixOfFilesFromRawAndFilterRule(t *testing.T) {
-	Opt := DefaultOpt
+	Opt := Opt
 
 	// Set up the input
 	Opt.FilterRule = []string{"- filter1", "- filter1b"}
@@ -89,7 +89,7 @@ func TestNewFilterForbiddenMixOfFilesFromRawAndFilterRule(t *testing.T) {
 }
 
 func TestNewFilterWithFilesFromAlone(t *testing.T) {
-	Opt := DefaultOpt
+	Opt := Opt
 
 	// Set up the input
 	Opt.FilesFrom = []string{testFile(t, "#comment\nfiles1\nfiles2\n")}
@@ -117,7 +117,7 @@ func TestNewFilterWithFilesFromAlone(t *testing.T) {
 }
 
 func TestNewFilterWithFilesFromRaw(t *testing.T) {
-	Opt := DefaultOpt
+	Opt := Opt
 
 	// Set up the input
 	Opt.FilesFromRaw = []string{testFile(t, "#comment\nfiles1\nfiles2\n")}
@@ -145,7 +145,7 @@ func TestNewFilterWithFilesFromRaw(t *testing.T) {
 }
 
 func TestNewFilterFullExceptFilesFromOpt(t *testing.T) {
-	Opt := DefaultOpt
+	Opt := Opt
 
 	mins := fs.SizeSuffix(100 * 1024)
 	maxs := fs.SizeSuffix(1000 * 1024)
@@ -355,6 +355,15 @@ func TestNewFilterMakeListR(t *testing.T) {
 	}
 	assert.Equal(t, want, newObjects)
 	assert.Equal(t, want, listRObjects)
+
+	// Now check an error is returned from NewObject
+	require.NoError(t, f.AddFile("error"))
+	err = listR(context.Background(), "", listRcallback)
+	require.EqualError(t, err, assert.AnError.Error())
+
+	// The checker will exit by the error above
+	ci := fs.GetConfig(context.Background())
+	ci.Checkers = 1
 
 	// Now check an error is returned from NewObject
 	require.NoError(t, f.AddFile("error"))
@@ -848,7 +857,9 @@ func TestGetConfig(t *testing.T) {
 	ctx := context.Background()
 
 	// Check nil
-	config := GetConfig(nil) //lint:ignore SA1012 we want to test passing a nil Context and therefore ignore lint suggestion of using context.TODO
+	//lint:ignore SA1012 false positive when running staticcheck, we want to test passing a nil Context and therefore ignore lint suggestion to use context.TODO
+	//nolint:staticcheck // Don't include staticcheck when running golangci-lint to avoid SA1012
+	config := GetConfig(nil)
 	assert.Equal(t, globalConfig, config)
 
 	// Check empty config
