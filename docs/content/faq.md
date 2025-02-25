@@ -33,7 +33,7 @@ The syncs would be incremental (on a file by file basis).
 
 e.g.
 
-    rclone sync -i drive:Folder s3:bucket
+    rclone sync --interactive drive:Folder s3:bucket
 
 
 ### Using rclone from multiple locations at the same time ###
@@ -42,8 +42,8 @@ You can use rclone from multiple places at the same time if you choose
 different subdirectory for the output, e.g.
 
 ```
-Server A> rclone sync -i /tmp/whatever remote:ServerA
-Server B> rclone sync -i /tmp/whatever remote:ServerB
+Server A> rclone sync --interactive /tmp/whatever remote:ServerA
+Server B> rclone sync --interactive /tmp/whatever remote:ServerB
 ```
 
 If you sync to the same directory then you should use rclone copy
@@ -71,7 +71,7 @@ support partially uploading an object. You can't take an existing
 object, and change some bytes in the middle of it.
 
 It would be possible to make a sync system which stored binary diffs
-instead of whole objects like rclone does, but that would break the
+like rsync does, instead of whole objects, but that would break the
 1:1 mapping of files on your hard disk to objects in the remote cloud
 storage system.
 
@@ -190,9 +190,29 @@ If you are using `systemd-resolved` (default on Arch Linux), ensure it
 is at version 233 or higher. Previous releases contain a bug which
 causes not all domains to be resolved properly.
 
-Additionally with the `GODEBUG=netdns=` environment variable the Go
-resolver decision can be influenced. This also allows to resolve certain
-issues with DNS resolution. See the [name resolution section in the go docs](https://golang.org/pkg/net/#hdr-Name_Resolution).
+
+The Go resolver decision can be influenced with the `GODEBUG=netdns=...`
+environment variable. This also allows to resolve certain issues with
+DNS resolution. On Windows or MacOS systems, try forcing use of the
+internal Go resolver by setting `GODEBUG=netdns=go` at runtime. On
+other systems (Linux, \*BSD, etc) try forcing use of the system
+name resolver by setting `GODEBUG=netdns=cgo` (and recompile rclone
+from source with CGO enabled if necessary). See the
+[name resolution section in the go docs](https://golang.org/pkg/net/#hdr-Name_Resolution).
+
+### Failed to start auth webserver on Windows ###
+```
+Error: config failed to refresh token: failed to start auth webserver: listen tcp 127.0.0.1:53682: bind: An attempt was made to access a socket in a way forbidden by its access permissions.
+...
+yyyy/mm/dd hh:mm:ss Fatal error: config failed to refresh token: failed to start auth webserver: listen tcp 127.0.0.1:53682: bind: An attempt was made to access a socket in a way forbidden by its access permissions.
+```
+
+This is sometimes caused by the Host Network Service causing issues with opening the port on the host.
+
+A simple solution may be restarting the Host Network Service with eg. Powershell
+```
+Restart-Service hns
+```
 
 ### The total size reported in the stats for a sync is wrong and keeps changing
 
@@ -213,9 +233,11 @@ value, say `export GOGC=20`.  This will make the garbage collector
 work harder, reducing memory size at the expense of CPU usage.
 
 The most common cause of rclone using lots of memory is a single
-directory with thousands or millions of files in.  Rclone has to load
-this entirely into memory as rclone objects.  Each rclone object takes
-0.5k-1k of memory.
+directory with millions of files in. Rclone has to load this entirely
+into memory as rclone objects. Each rclone object takes 0.5k-1k of
+memory. There is
+[a workaround for this](https://github.com/rclone/rclone/wiki/Big-syncs-with-millions-of-files)
+which involves a bit of scripting.
 
 ### Rclone changes fullwidth Unicode punctuation marks in file names
 

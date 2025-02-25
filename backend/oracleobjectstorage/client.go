@@ -1,5 +1,4 @@
 //go:build !plan9 && !solaris && !js
-// +build !plan9,!solaris,!js
 
 package oracleobjectstorage
 
@@ -9,6 +8,8 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"path"
+	"strings"
 
 	"github.com/oracle/oci-go-sdk/v65/common"
 	"github.com/oracle/oci-go-sdk/v65/common/auth"
@@ -18,20 +19,40 @@ import (
 	"github.com/rclone/rclone/fs/fshttp"
 )
 
+func expandPath(filepath string) (expandedPath string) {
+	if filepath == "" {
+		return filepath
+	}
+	cleanedPath := path.Clean(filepath)
+	expandedPath = cleanedPath
+	if strings.HasPrefix(cleanedPath, "~") {
+		rest := cleanedPath[2:]
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return expandedPath
+		}
+		expandedPath = path.Join(home, rest)
+	}
+	return
+}
+
 func getConfigurationProvider(opt *Options) (common.ConfigurationProvider, error) {
 	switch opt.Provider {
 	case instancePrincipal:
 		return auth.InstancePrincipalConfigurationProvider()
 	case userPrincipal:
-		if opt.ConfigFile != "" && !fileExists(opt.ConfigFile) {
-			fs.Errorf(userPrincipal, "oci config file doesn't exist at %v", opt.ConfigFile)
+		expandConfigFilePath := expandPath(opt.ConfigFile)
+		if expandConfigFilePath != "" && !fileExists(expandConfigFilePath) {
+			fs.Errorf(userPrincipal, "oci config file doesn't exist at %v", expandConfigFilePath)
 		}
-		return common.CustomProfileConfigProvider(opt.ConfigFile, opt.ConfigProfile), nil
+		return common.CustomProfileConfigProvider(expandConfigFilePath, opt.ConfigProfile), nil
 	case resourcePrincipal:
 		return auth.ResourcePrincipalConfigurationProvider()
 	case noAuth:
 		fs.Infof("client", "using no auth provider")
 		return getNoAuthConfiguration()
+	case workloadIdentity:
+		return auth.OkeWorkloadIdentityConfigurationProvider()
 	default:
 	}
 	return common.DefaultConfigProvider(), nil
@@ -49,6 +70,9 @@ func newObjectStorageClient(ctx context.Context, opt *Options) (*objectstorage.O
 	}
 	if opt.Region != "" {
 		client.SetRegion(opt.Region)
+	}
+	if opt.Endpoint != "" {
+		client.Host = opt.Endpoint
 	}
 	modifyClient(ctx, opt, &client.BaseClient)
 	return &client, err

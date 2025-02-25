@@ -43,17 +43,21 @@ Choose a number from below, or type in your own value
 url> https://example.com/remote.php/webdav/
 Name of the WebDAV site/service/software you are using
 Choose a number from below, or type in your own value
- 1 / Nextcloud
-   \ "nextcloud"
- 2 / Owncloud
-   \ "owncloud"
- 3 / Sharepoint Online, authenticated by Microsoft account.
-   \ "sharepoint"
- 4 / Sharepoint with NTLM authentication. Usually self-hosted or on-premises.
-   \ "sharepoint-ntlm"
- 5 / Other site/service or software
-   \ "other"
-vendor> 1
+ 1 / Fastmail Files
+   \ (fastmail)
+ 2 / Nextcloud
+   \ (nextcloud)
+ 3 / Owncloud
+   \ (owncloud)
+ 4 / Sharepoint Online, authenticated by Microsoft account
+   \ (sharepoint)
+ 5 / Sharepoint with NTLM authentication, usually self-hosted or on-premises
+   \ (sharepoint-ntlm)
+ 6 / rclone WebDAV server to serve a remote over HTTP via the WebDAV protocol
+   \ (rclone)
+ 7 / Other site/service or software
+   \ (other)
+vendor> 2
 User name
 user> user
 Password.
@@ -68,15 +72,15 @@ password:
 Bearer token instead of user/pass (e.g. a Macaroon)
 bearer_token>
 Remote config
---------------------
-[remote]
-type = webdav
-url = https://example.com/remote.php/webdav/
-vendor = nextcloud
-user = user
-pass = *** ENCRYPTED ***
-bearer_token =
---------------------
+Configuration complete.
+Options:
+- type: webdav
+- url: https://example.com/remote.php/webdav/
+- vendor: nextcloud
+- user: user
+- pass: *** ENCRYPTED ***
+- bearer_token:
+Keep this "remote" remote?
 y) Yes this is OK
 e) Edit this remote
 d) Delete this remote
@@ -97,13 +101,13 @@ To copy a local directory to an WebDAV directory called backup
 
     rclone copy /home/source remote:backup
 
-### Modified time and hashes ###
+### Modification times and hashes
 
 Plain WebDAV does not support modified times.  However when used with
-Owncloud or Nextcloud rclone will support modified times.
+Fastmail Files, Owncloud or Nextcloud rclone will support modified times.
 
 Likewise plain WebDAV does not support hashes, however when used with
-Owncloud or Nextcloud rclone will support SHA1 and MD5 hashes.
+Fastmail Files, Owncloud or Nextcloud rclone will support SHA1 and MD5 hashes.
 Depending on the exact version of Owncloud or Nextcloud hashes may
 appear on all objects, or only on objects which had a hash uploaded
 with them.
@@ -137,6 +141,8 @@ Properties:
 - Type:        string
 - Required:    false
 - Examples:
+    - "fastmail"
+        - Fastmail Files
     - "nextcloud"
         - Nextcloud
     - "owncloud"
@@ -145,6 +151,8 @@ Properties:
         - Sharepoint Online, authenticated by Microsoft account
     - "sharepoint-ntlm"
         - Sharepoint with NTLM authentication, usually self-hosted or on-premises
+    - "rclone"
+        - rclone WebDAV server to serve a remote over HTTP via the WebDAV protocol
     - "other"
         - Other site/service or software
 
@@ -236,11 +244,116 @@ Properties:
 - Type:        CommaSepList
 - Default:     
 
+#### --webdav-pacer-min-sleep
+
+Minimum time to sleep between API calls.
+
+Properties:
+
+- Config:      pacer_min_sleep
+- Env Var:     RCLONE_WEBDAV_PACER_MIN_SLEEP
+- Type:        Duration
+- Default:     10ms
+
+#### --webdav-nextcloud-chunk-size
+
+Nextcloud upload chunk size.
+
+We recommend configuring your NextCloud instance to increase the max chunk size to 1 GB for better upload performances.
+See https://docs.nextcloud.com/server/latest/admin_manual/configuration_files/big_file_upload_configuration.html#adjust-chunk-size-on-nextcloud-side
+
+Set to 0 to disable chunked uploading.
+
+
+Properties:
+
+- Config:      nextcloud_chunk_size
+- Env Var:     RCLONE_WEBDAV_NEXTCLOUD_CHUNK_SIZE
+- Type:        SizeSuffix
+- Default:     10Mi
+
+#### --webdav-owncloud-exclude-shares
+
+Exclude ownCloud shares
+
+Properties:
+
+- Config:      owncloud_exclude_shares
+- Env Var:     RCLONE_WEBDAV_OWNCLOUD_EXCLUDE_SHARES
+- Type:        bool
+- Default:     false
+
+#### --webdav-owncloud-exclude-mounts
+
+Exclude ownCloud mounted storages
+
+Properties:
+
+- Config:      owncloud_exclude_mounts
+- Env Var:     RCLONE_WEBDAV_OWNCLOUD_EXCLUDE_MOUNTS
+- Type:        bool
+- Default:     false
+
+#### --webdav-unix-socket
+
+Path to a unix domain socket to dial to, instead of opening a TCP connection directly
+
+Properties:
+
+- Config:      unix_socket
+- Env Var:     RCLONE_WEBDAV_UNIX_SOCKET
+- Type:        string
+- Required:    false
+
+#### --webdav-auth-redirect
+
+Preserve authentication on redirect.
+
+If the server redirects rclone to a new domain when it is trying to
+read a file then normally rclone will drop the Authorization: header
+from the request.
+
+This is standard security practice to avoid sending your credentials
+to an unknown webserver.
+
+However this is desirable in some circumstances. If you are getting
+an error like "401 Unauthorized" when rclone is attempting to read
+files from the webdav server then you can try this option.
+
+
+Properties:
+
+- Config:      auth_redirect
+- Env Var:     RCLONE_WEBDAV_AUTH_REDIRECT
+- Type:        bool
+- Default:     false
+
+#### --webdav-description
+
+Description of the remote.
+
+Properties:
+
+- Config:      description
+- Env Var:     RCLONE_WEBDAV_DESCRIPTION
+- Type:        string
+- Required:    false
+
 {{< rem autogenerated options stop >}}
 
 ## Provider notes
 
 See below for notes on specific providers.
+
+### Fastmail Files
+
+Use `https://webdav.fastmail.com/` or a subdirectory as the URL,
+and your Fastmail email `username@domain.tld` as the username.
+Follow [this documentation](https://www.fastmail.help/hc/en-us/articles/360058752854-App-passwords)
+to create an app password with access to `Files (WebDAV)` and use
+this as the password.
+
+Fastmail supports modified times using the `X-OC-Mtime` header.
 
 ### Owncloud
 
@@ -336,6 +449,14 @@ For Rclone calls copying files (especially Office files such as .docx, .xlsx, et
 ```
 --ignore-size --ignore-checksum --update
 ```
+
+## Rclone
+
+Use this option if you are hosting remotes over WebDAV provided by rclone.
+Read [rclone serve webdav](commands/rclone_serve_webdav/) for more details.
+
+rclone serve supports modified times using the `X-OC-Mtime` header.
+
 
 ### dCache
 

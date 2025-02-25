@@ -1,5 +1,4 @@
 //go:build !plan9 && !solaris && !js
-// +build !plan9,!solaris,!js
 
 // Package oracleobjectstorage provides an interface to the OCI object storage system.
 package oracleobjectstorage
@@ -59,19 +58,27 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	if err != nil {
 		return nil, err
 	}
+	err = validateSSECustomerKeyOptions(opt)
+	if err != nil {
+		return nil, err
+	}
 	ci := fs.GetConfig(ctx)
 	objectStorageClient, err := newObjectStorageClient(ctx, opt)
 	if err != nil {
 		return nil, err
 	}
-	p := pacer.NewDefault(pacer.MinSleep(minSleep), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))
+	pc := fs.NewPacer(ctx, pacer.NewS3(pacer.MinSleep(minSleep)))
+	// Set pacer retries to 2 (1 try and 1 retry) because we are
+	// relying on SDK retry mechanism, but we allow 2 attempts to
+	// retry directory listings after XMLSyntaxError
+	pc.SetRetries(2)
 	f := &Fs{
 		name:  name,
 		opt:   *opt,
 		ci:    ci,
 		srv:   objectStorageClient,
 		cache: bucket.NewCache(),
-		pacer: fs.NewPacer(ctx, p),
+		pacer: pc,
 	}
 	f.setRoot(root)
 	f.features = (&fs.Features{
@@ -126,6 +133,14 @@ func (f *Fs) setUploadCutoff(cs fs.SizeSuffix) (old fs.SizeSuffix, err error) {
 	err = checkUploadCutoff(cs)
 	if err == nil {
 		old, f.opt.UploadCutoff = f.opt.UploadCutoff, cs
+	}
+	return
+}
+
+func (f *Fs) setCopyCutoff(cs fs.SizeSuffix) (old fs.SizeSuffix, err error) {
+	err = checkUploadChunkSize(cs)
+	if err == nil {
+		old, f.opt.CopyCutoff = f.opt.CopyCutoff, cs
 	}
 	return
 }
@@ -310,7 +325,6 @@ func (f *Fs) list(ctx context.Context, bucket, directory, prefix string, addBuck
 			remote := *object.Name
 			remote = f.opt.Enc.ToStandardPath(remote)
 			if !strings.HasPrefix(remote, prefix) {
-				// fs.Debugf(f, "Odd name received %v", object.Name)
 				continue
 			}
 			remote = remote[len(prefix):]
@@ -550,15 +564,15 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 	})
 }
 
-func (f *Fs) abortMultiPartUpload(ctx context.Context, bucketName, bucketPath, uploadID string) (err error) {
-	if uploadID == "" {
+func (f *Fs) abortMultiPartUpload(ctx context.Context, bucketName, bucketPath, uploadID *string) (err error) {
+	if uploadID == nil || *uploadID == "" {
 		return nil
 	}
 	request := objectstorage.AbortMultipartUploadRequest{
 		NamespaceName: common.String(f.opt.Namespace),
-		BucketName:    common.String(bucketName),
-		ObjectName:    common.String(bucketPath),
-		UploadId:      common.String(uploadID),
+		BucketName:    bucketName,
+		ObjectName:    bucketPath,
+		UploadId:      uploadID,
 	}
 	err = f.pacer.Call(func() (bool, error) {
 		resp, err := f.srv.AbortMultipartUpload(ctx, request)
@@ -581,12 +595,7 @@ func (f *Fs) cleanUpBucket(ctx context.Context, bucket string, maxAge time.Durat
 				if operations.SkipDestructive(ctx, what, "remove pending upload") {
 					continue
 				}
-				ignoreErr := f.abortMultiPartUpload(ctx, *upload.Bucket, *upload.Object, *upload.UploadId)
-				if ignoreErr != nil {
-					// fs.Debugf(f, "ignoring error %s", ignoreErr)
-				}
-			} else {
-				// fs.Debugf(f, "ignoring %s", what)
+				_ = f.abortMultiPartUpload(ctx, upload.Bucket, upload.Object, upload.UploadId)
 			}
 		} else {
 			fs.Infof(f, "MultipartUpload doesn't have sufficient details to abort.")
@@ -681,12 +690,13 @@ func (f *Fs) ListR(ctx context.Context, dir string, callback fs.ListRCallback) (
 
 // Check the interfaces are satisfied
 var (
-	_ fs.Fs          = &Fs{}
-	_ fs.Copier      = &Fs{}
-	_ fs.PutStreamer = &Fs{}
-	_ fs.ListRer     = &Fs{}
-	_ fs.Commander   = &Fs{}
-	_ fs.CleanUpper  = &Fs{}
+	_ fs.Fs              = &Fs{}
+	_ fs.Copier          = &Fs{}
+	_ fs.PutStreamer     = &Fs{}
+	_ fs.ListRer         = &Fs{}
+	_ fs.Commander       = &Fs{}
+	_ fs.CleanUpper      = &Fs{}
+	_ fs.OpenChunkWriter = &Fs{}
 
 	_ fs.Object    = &Object{}
 	_ fs.MimeTyper = &Object{}

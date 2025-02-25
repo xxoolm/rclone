@@ -224,6 +224,17 @@ Properties:
 - Type:        SizeSuffix
 - Default:     0
 
+#### --hasher-description
+
+Description of the remote.
+
+Properties:
+
+- Config:      description
+- Env Var:     RCLONE_HASHER_DESCRIPTION
+- Type:        string
+- Required:    false
+
 ### Metadata
 
 Any metadata supported by the underlying remote is read and written.
@@ -323,6 +334,7 @@ The `rclone hashsum` (or `md5sum` or `sha1sum`) command will:
 
 ### Other operations
 
+- any time a hash is requested, follow the logic from 1-4 from `hashsum` above
 - whenever a file is uploaded or downloaded **in full**, capture the stream
   to calculate all supported hashes on the fly and update database
 - server-side `move`  will update keys of existing cache entries
@@ -341,6 +353,6 @@ directory, usually `~/.cache/rclone/kv/`. Databases are maintained
 one per _base_ backend, named like `BaseRemote~hasher.bolt`.
 Checksums for multiple `alias`-es into a single base backend
 will be stored in the single database. All local paths are treated as
-aliases into the `local` backend (unless crypted or chunked) and stored
+aliases into the `local` backend (unless encrypted or chunked) and stored
 in `~/.cache/rclone/kv/local~hasher.bolt`.
 Databases can be shared between multiple rclone processes.

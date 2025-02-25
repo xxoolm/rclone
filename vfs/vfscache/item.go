@@ -172,13 +172,6 @@ func (item *Item) inUse() bool {
 	return item.opens != 0 || item.info.Dirty
 }
 
-// getATime returns the ATime of the item
-func (item *Item) getATime() time.Time {
-	item.mu.Lock()
-	defer item.mu.Unlock()
-	return item.info.ATime
-}
-
 // getDiskSize returns the size on disk (approximately) of the item
 //
 // We return the sizes of the chunks we have fetched, however there is
@@ -580,6 +573,15 @@ func (item *Item) open(o fs.Object) (err error) {
 	return err
 }
 
+// Calls f with mu unlocked, re-locking mu if a panic is raised
+//
+// mu must be locked when calling this function
+func unlockMutexForCall(mu *sync.Mutex, f func()) {
+	mu.Unlock()
+	defer mu.Lock()
+	f()
+}
+
 // Store stores the local cache file to the remote object, returning
 // the new remote object. objOld is the old object if known.
 //
@@ -596,10 +598,14 @@ func (item *Item) _store(ctx context.Context, storeFn StoreFn) (err error) {
 	// Object has disappeared if cacheObj == nil
 	if cacheObj != nil {
 		o, name := item.o, item.name
-		item.mu.Unlock()
-		o, err := operations.Copy(ctx, item.c.fremote, o, name, cacheObj)
-		item.mu.Lock()
+		unlockMutexForCall(&item.mu, func() {
+			o, err = operations.Copy(ctx, item.c.fremote, o, name, cacheObj)
+		})
 		if err != nil {
+			if errors.Is(err, fs.ErrorCantUploadEmptyFiles) {
+				fs.Errorf(name, "Writeback failed: %v", err)
+				return nil
+			}
 			return fmt.Errorf("vfs cache: failed to transfer file from cache to remote: %w", err)
 		}
 		item.o = o
@@ -618,7 +624,7 @@ func (item *Item) _store(ctx context.Context, storeFn StoreFn) (err error) {
 		item.mu.Lock()
 	}
 
-	// Show item is clean and is elegible for cache removal
+	// Show item is clean and is eligible for cache removal
 	item.info.Dirty = false
 	err = item._save()
 	if err != nil {
@@ -731,7 +737,7 @@ func (item *Item) Close(storeFn StoreFn) (err error) {
 			item.c.writeback.SetID(&item.writeBackID)
 			id := item.writeBackID
 			item.mu.Unlock()
-			item.c.writeback.Add(id, item.name, item.modified, func(ctx context.Context) error {
+			item.c.writeback.Add(id, item.name, item.info.Size, item.modified, func(ctx context.Context) error {
 				return item.store(ctx, storeFn)
 			})
 			item.mu.Lock()
@@ -813,6 +819,7 @@ func (item *Item) _checkObject(o fs.Object) error {
 				if !item.info.Dirty {
 					fs.Debugf(item.name, "vfs cache: removing cached entry as stale (remote fingerprint %q != cached fingerprint %q)", remoteFingerprint, item.info.Fingerprint)
 					item._remove("stale (remote is different)")
+					item.info.Fingerprint = remoteFingerprint
 				} else {
 					fs.Debugf(item.name, "vfs cache: remote object has changed but local object modified - keeping it (remote fingerprint %q != cached fingerprint %q)", remoteFingerprint, item.info.Fingerprint)
 				}
@@ -966,7 +973,7 @@ func (item *Item) Reset() (rr ResetResult, spaceFreed int64, err error) {
 	}
 
 	/* Do not need to reset an empty cache file unless it was being reset and the reset failed.
-	   Some thread(s) may be waiting on the reset's succesful completion in that case. */
+	   Some thread(s) may be waiting on the reset's successful completion in that case. */
 	if item.info.Rs.Size() == 0 && !item.beingReset {
 		return SkippedEmpty, 0, nil
 	}
@@ -1279,6 +1286,15 @@ func (item *Item) readAt(b []byte, off int64) (n int, err error) {
 	err = item._ensure(off, int64(len(b)))
 	if err != nil {
 		return 0, err
+	}
+
+	// Check to see if object has shrunk - if so don't read too much.
+	if item.o != nil && !item.info.Dirty && item.o.Size() != item.info.Size {
+		fs.Debugf(item.o, "Size has changed from %d to %d", item.info.Size, item.o.Size())
+		err = item._truncate(item.o.Size())
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	item.info.ATime = time.Now()

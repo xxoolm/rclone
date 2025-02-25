@@ -109,6 +109,9 @@ case "$OS_type" in
   armv7*)
     OS_type='arm-v7'
     ;;
+  armv6*)
+    OS_type='arm-v6'
+    ;;
   arm*)
     OS_type='arm'
     ;;
@@ -190,9 +193,11 @@ case "$OS" in
     exit 2
 esac
 
-
 #update version variable post install
 version=$(rclone --version 2>>errors | head -n 1)
+
+#cleanup
+rm -rf "$tmp_dir"
 
 printf "\n${version} has successfully installed."
 printf '\nNow run "rclone config" for setup. Check https://rclone.org/docs/ for more details.\n\n'

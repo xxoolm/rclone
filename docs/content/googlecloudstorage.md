@@ -128,16 +128,16 @@ If your browser doesn't open automatically go to the following link: http://127.
 Log in and authorize rclone for access
 Waiting for code...
 Got code
---------------------
-[remote]
-type = google cloud storage
-client_id =
-client_secret =
-token = {"AccessToken":"xxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","RefreshToken":"x/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_xxxxxxxxx","Expiry":"2014-07-17T20:49:14.929208288+01:00","Extra":null}
-project_number = 12345678
-object_acl = private
-bucket_acl = private
---------------------
+Configuration complete.
+Options:
+- type: google cloud storage
+- client_id:
+- client_secret:
+- token: {"AccessToken":"xxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","RefreshToken":"x/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_xxxxxxxxx","Expiry":"2014-07-17T20:49:14.929208288+01:00","Extra":null}
+- project_number: 12345678
+- object_acl: private
+- bucket_acl: private
+Keep this "remote" remote?
 y) Yes this is OK
 e) Edit this remote
 d) Delete this remote
@@ -172,7 +172,7 @@ List the contents of a bucket
 Sync `/home/local/directory` to the remote bucket, deleting any excess
 files in the bucket.
 
-    rclone sync -i /home/local/directory remote:bucket
+    rclone sync --interactive /home/local/directory remote:bucket
 
 ### Service Account support
 
@@ -200,6 +200,55 @@ flow. If you'd rather stuff the contents of the credentials file into
 the rclone config file, you can set `service_account_credentials` with
 the actual contents of the file instead, or set the equivalent
 environment variable.
+
+### Service Account Authentication with Access Tokens
+
+Another option for service account authentication is to use access tokens via *gcloud impersonate-service-account*. Access tokens protect security by avoiding the use of the JSON
+key file, which can be breached. They also bypass oauth login flow, which is simpler 
+on remote VMs that lack a web browser.
+
+If you already have a working service account, skip to step 3. 
+
+#### 1. Create a service account using 
+
+    gcloud iam service-accounts create gcs-read-only 
+
+You can re-use an existing service account as well (like the one created above)
+
+#### 2. Attach a Viewer (read-only) or User (read-write) role to the service account 
+     $ PROJECT_ID=my-project
+     $ gcloud --verbose iam service-accounts add-iam-policy-binding \
+        gcs-read-only@${PROJECT_ID}.iam.gserviceaccount.com  \
+        --member=serviceAccount:gcs-read-only@${PROJECT_ID}.iam.gserviceaccount.com \
+        --role=roles/storage.objectViewer
+
+Use the Google Cloud console to identify a limited role. Some relevant pre-defined roles:
+
+* *roles/storage.objectUser* -- read-write access but no admin privileges
+* *roles/storage.objectViewer* -- read-only access to objects
+* *roles/storage.admin*  -- create buckets & administrative roles
+
+#### 3. Get a temporary access key for the service account
+
+    $ gcloud auth application-default print-access-token  \
+       --impersonate-service-account \
+          gcs-read-only@${PROJECT_ID}.iam.gserviceaccount.com  
+
+    ya29.c.c0ASRK0GbAFEewXD [truncated]
+
+#### 4. Update `access_token` setting
+hit `CTRL-C` when you see *waiting for code*.  This will save the config without doing oauth flow
+
+    rclone config update ${REMOTE_NAME} access_token ya29.c.c0Axxxx
+
+#### 5. Run rclone as usual
+
+    rclone ls dev-gcs:${MY_BUCKET}/
+
+### More Info on Service Accounts
+
+* [Official GCS Docs](https://cloud.google.com/compute/docs/access/service-accounts)
+* [Guide on Service Accounts using Key Files (less secure, but similar concepts)](https://forum.rclone.org/t/access-using-google-service-account/24822/2)
 
 ### Anonymous Access
 
@@ -247,7 +296,7 @@ Eg `--header-upload "Content-Type text/potato"`
 Note that the last of these is for setting custom metadata in the form
 `--header-upload "x-goog-meta-key: value"`
 
-### Modification time
+### Modification times
 
 Google Cloud Storage stores md5sum natively.
 Google's [gsutil](https://cloud.google.com/storage/docs/gsutil) tool stores modification time
@@ -317,6 +366,19 @@ Properties:
 
 - Config:      project_number
 - Env Var:     RCLONE_GCS_PROJECT_NUMBER
+- Type:        string
+- Required:    false
+
+#### --gcs-user-project
+
+User project.
+
+Optional - needed only for requester pays.
+
+Properties:
+
+- Config:      user_project
+- Env Var:     RCLONE_GCS_USER_PROJECT
 - Type:        string
 - Required:    false
 
@@ -552,6 +614,24 @@ Properties:
     - "DURABLE_REDUCED_AVAILABILITY"
         - Durable reduced availability storage class
 
+#### --gcs-env-auth
+
+Get GCP IAM credentials from runtime (environment variables or instance meta data if no env vars).
+
+Only applies if service_account_file and service_account_credentials is blank.
+
+Properties:
+
+- Config:      env_auth
+- Env Var:     RCLONE_GCS_ENV_AUTH
+- Type:        bool
+- Default:     false
+- Examples:
+    - "false"
+        - Enter credentials in the next step.
+    - "true"
+        - Get GCP IAM credentials from the environment (env vars or IAM).
+
 ### Advanced options
 
 Here are the Advanced options specific to google cloud storage (Google Cloud Storage (this is not Google Drive)).
@@ -592,6 +672,48 @@ Properties:
 - Env Var:     RCLONE_GCS_TOKEN_URL
 - Type:        string
 - Required:    false
+
+#### --gcs-client-credentials
+
+Use client credentials OAuth flow.
+
+This will use the OAUTH2 client Credentials Flow as described in RFC 6749.
+
+Properties:
+
+- Config:      client_credentials
+- Env Var:     RCLONE_GCS_CLIENT_CREDENTIALS
+- Type:        bool
+- Default:     false
+
+#### --gcs-access-token
+
+Short-lived access token.
+
+Leave blank normally.
+Needed only if you want use short-lived access token instead of interactive login.
+
+Properties:
+
+- Config:      access_token
+- Env Var:     RCLONE_GCS_ACCESS_TOKEN
+- Type:        string
+- Required:    false
+
+#### --gcs-directory-markers
+
+Upload an empty object with a trailing slash when a new directory is created
+
+Empty folders are unsupported for bucket based remotes, this option creates an empty
+object ending with "/", to persist the folder.
+
+
+Properties:
+
+- Config:      directory_markers
+- Env Var:     RCLONE_GCS_DIRECTORY_MARKERS
+- Type:        bool
+- Default:     false
 
 #### --gcs-no-check-bucket
 
@@ -650,8 +772,19 @@ Properties:
 
 - Config:      encoding
 - Env Var:     RCLONE_GCS_ENCODING
-- Type:        MultiEncoder
+- Type:        Encoding
 - Default:     Slash,CrLf,InvalidUtf8,Dot
+
+#### --gcs-description
+
+Description of the remote.
+
+Properties:
+
+- Config:      description
+- Env Var:     RCLONE_GCS_DESCRIPTION
+- Type:        string
+- Required:    false
 
 {{< rem autogenerated options stop >}}
 

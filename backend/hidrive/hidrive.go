@@ -2,7 +2,7 @@
 package hidrive
 
 // FIXME HiDrive only supports file or folder names of 255 characters or less.
-// Operations that create files oder folder with longer names will throw a HTTP error:
+// Operations that create files or folders with longer names will throw an HTTP error:
 // - 422 Unprocessable Entity
 // A more graceful way for rclone to handle this may be desirable.
 
@@ -31,7 +31,6 @@ import (
 	"github.com/rclone/rclone/lib/oauthutil"
 	"github.com/rclone/rclone/lib/pacer"
 	"github.com/rclone/rclone/lib/rest"
-	"golang.org/x/oauth2"
 )
 
 const (
@@ -48,11 +47,9 @@ const (
 // Globals
 var (
 	// Description of how to auth for this app.
-	oauthConfig = &oauth2.Config{
-		Endpoint: oauth2.Endpoint{
-			AuthURL:  "https://my.hidrive.com/client/authorize",
-			TokenURL: "https://my.hidrive.com/oauth2/token",
-		},
+	oauthConfig = &oauthutil.Config{
+		AuthURL:      "https://my.hidrive.com/client/authorize",
+		TokenURL:     "https://my.hidrive.com/oauth2/token",
 		ClientID:     rcloneClientID,
 		ClientSecret: obscure.MustReveal(rcloneEncryptedClientSecret),
 		RedirectURL:  oauthutil.TitleBarRedirectURL,
@@ -338,7 +335,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 			return nil, fmt.Errorf("could not access root-prefix: %w", err)
 		}
 		if item.Type != api.HiDriveObjectTypeDirectory {
-			return nil, errors.New("The root-prefix needs to point to a valid directory or be empty")
+			return nil, errors.New("the root-prefix needs to point to a valid directory or be empty")
 		}
 	}
 
@@ -762,6 +759,12 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
 	return nil
 }
 
+// Shutdown shutdown the fs
+func (f *Fs) Shutdown(ctx context.Context) error {
+	f.tokenRenewer.Shutdown()
+	return nil
+}
+
 // ------------------------------------------------------------
 
 // Fs returns the parent Fs.
@@ -997,6 +1000,7 @@ var (
 	_ fs.Copier         = (*Fs)(nil)
 	_ fs.Mover          = (*Fs)(nil)
 	_ fs.DirMover       = (*Fs)(nil)
+	_ fs.Shutdowner     = (*Fs)(nil)
 	_ fs.Object         = (*Object)(nil)
 	_ fs.IDer           = (*Object)(nil)
 )
